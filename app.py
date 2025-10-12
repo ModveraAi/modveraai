@@ -396,6 +396,189 @@ def auth_complete(session_id: str):
         # Optional: confirm subscription
         _ = has_active_subscription(email)
 
+
+# ===================== MODVERA DASHBOARD + AUTH BLOCK =====================
+# Paste this at the BOTTOM of app.py (left-aligned). Make sure you do not keep older
+# versions of these same routes in the file to avoid duplicate-path conflicts.
+
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+# --- Tiny helper: check active sub (optional; safe fallback if webhook delays) ---
+def has_active_subscription(email: str) -> bool:
+    try:
+        customers = stripe.Customer.search(query=f'email:"{email}"')
+        for c in customers.auto_paging_iter():
+            subs = stripe.Subscription.list(customer=c.id, status="all")
+            for s in subs.auto_paging_iter():
+                if s.status in ("active", "trialing", "past_due"):
+                    return True
+        return False
+    except Exception:
+        return False
+
+# --- Shows which email (if any) is logged in via cookie ---
+@app.get("/whoami", response_class=JSONResponse)
+def whoami(request: Request):
+    return {"email": request.cookies.get("auth_email")}
+
+# --- Logout: clears cookie and returns to dashboard ---
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse(url=f"{PUBLIC_URL}/dashboard?logged_out=1", status_code=302)
+    resp.delete_cookie("auth_email")
+    return resp
+
+# --- Manual unlock for owner (useful during setup) ---
+@app.get("/unlock")
+def unlock(email: str = None):
+    email = (email or DEV_FREE_EMAIL or "owner@example.com").strip().lower()
+    resp = RedirectResponse(url=f"{PUBLIC_URL}/dashboard?welcome=1", status_code=302)
+    resp.set_cookie("auth_email", email, httponly=False, samesite="Lax", max_age=60*60*24*30)
+    return resp
+
+# --- Stripe success landing: set cookie then bounce to dashboard ---
+@app.get("/auth/complete")
+def auth_complete(session_id: str):
+    try:
+        sess = stripe.checkout.Session.retrieve(session_id, expand=["customer", "customer_details"])
+        email = (sess.get("customer_details") or {}).get("email") \
+                or (sess.get("customer") or {}).get("email")
+        if not email:
+            return RedirectResponse(url=f"{PUBLIC_URL}/dashboard#Billing", status_code=302)
+
+        # Optional: double-check; not required for speed
+        _ = has_active_subscription(email)
+
+        resp = RedirectResponse(url=f"{PUBLIC_URL}/dashboard?welcome=1", status_code=302)
+        resp.set_cookie("auth_email", email, httponly=False, samesite="Lax", max_age=60*60*24*30)
+        return resp
+    except Exception:
+        return RedirectResponse(url=f"{PUBLIC_URL}/dashboard#Billing", status_code=302)
+
+# --- Main Dashboard: shows Signed-in banner, cards, and Billing if locked ---
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    email = request.cookies.get("auth_email")
+    unlocked = bool(email)
+
+    html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Modvera AI — Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {{ --bg:#0b0b0f; --card:#141419; --fg:#fff; --muted:#9aa; --brand:#5c6efb; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family: Poppins, system-ui, sans-serif; background:var(--bg); color:var(--fg); }}
+    .topbar {{ display:flex; gap:1rem; align-items:center; justify-content:space-between; padding:12px 20px; border-bottom:1px solid #1e1e25; position:sticky; top:0; background:#0d0d12cc; backdrop-filter: blur(6px); }}
+    .badge {{ font-size:12px; padding:6px 10px; border-radius:12px; border:1px solid #222; background:#111; }}
+    .badge.ok {{ color:#7ee787; }}
+    .badge.locked {{ color:#f6c177; border-color:#33222a; }}
+    .btn {{ color:var(--fg); text-decoration:none; border:1px solid #222; padding:8px 12px; border-radius:10px; }}
+    .btn:hover {{ border-color:var(--brand); }}
+    h1 {{ margin:20px 20px 6px; font-size:22px; font-weight:600; }}
+    .hint {{ color:var(--muted); margin: 0 20px 10px; }}
+    .grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap:14px; padding:20px; }}
+    .card {{ background:var(--card); border:1px solid #222; border-radius:16px; padding:18px; cursor:pointer; transition:.2s; min-height:120px; }}
+    .card:hover {{ transform: translateY(-3px); border-color: var(--brand); box-shadow: 0 0 12px #5c6efb33; }}
+    .locked {{ opacity:.5; cursor:not-allowed; }}
+    .billing {{ margin:20px; padding:16px; border:1px dashed #2a2a35; border-radius:12px; }}
+    .billing button {{ background:#1a1a22; color:#fff; border:1px solid #2a2a35; padding:10px 14px; border-radius:10px; margin-right:8px; cursor:pointer; }}
+    .billing button:hover {{ border-color:var(--brand); }}
+    footer {{ text-align:center; padding:16px; color:#666; border-top:1px solid #222; margin-top:12px; }}
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div>
+      <strong>Modvera AI</strong>
+      {"<span class='badge ok'>Signed in as " + email + "</span>" if unlocked else "<span class='badge locked'>Locked</span>"}
+    </div>
+    <div>
+      {"<a class='btn' href='/logout'>Log out</a>" if unlocked else "<a class='btn' href='/dashboard#Billing'>Subscribe</a>"}
+    </div>
+  </div>
+
+  <h1>{'Your Tools' if unlocked else 'Unlock your tools'}</h1>
+  <p class="hint">{'Click a card to open a tool.' if unlocked else 'Subscribe with your email to unlock all tools.'}</p>
+
+  <div class="grid" id="toolsGrid">
+    <div class="card {'locked' if not unlocked else ''}" data-path="/tools/ai-receptionist">AI Receptionist</div>
+    <div class="card {'locked' if not unlocked else ''}" data-path="/tools/website-builder">Website Builder</div>
+    <div class="card {'locked' if not unlocked else ''}" data-path="/tools/lead-generator">Lead Generator</div>
+    <div class="card {'locked' if not unlocked else ''}" data-path="/tools/cold-call-trainer">Cold Call Trainer</div>
+    <div class="card {'locked' if not unlocked else ''}" data-path="/tools/custom-gpts">Custom GPTs</div>
+    <div class="card {'locked' if not unlocked else ''}" data-path="/tools/social-ads">Social Ads Creator</div>
+  </div>
+
+  {""
+  if unlocked else
+  f"""
+  <div class='billing' id='Billing'>
+    <h3>Billing</h3>
+    <p>Choose Monthly or Annual to unlock all tools. Owner email <code>{DEV_FREE_EMAIL}</code> uses the 100% code automatically.</p>
+    <button onclick="subscribe('monthly')">Subscribe Monthly</button>
+    <button onclick="subscribe('annual')">Subscribe Annual</button>
+  </div>
+  """
+  }
+
+  <footer>© 2025 Modvera LLC — All rights reserved.</footer>
+
+  <script>
+    async function subscribe(plan){{
+      const email = prompt("Enter your email to continue:"); if(!email) return;
+      const res = await fetch("/create-checkout-session", {{
+        method:"POST", headers:{{"Content-Type":"application/json"}},
+        body: JSON.stringify({{ plan, email }})
+      }});
+      const text = await res.text(); let data; try {{ data = JSON.parse(text); }} catch(e){{}}
+      if(res.ok && data && data.url) location.href = data.url;
+      else alert("Checkout error:\\n" + (data?.detail || text || "Unknown"));
+    }}
+
+    const unlocked = {str(unlocked).lower()};
+    document.querySelectorAll(".card").forEach(card => {{
+      card.addEventListener('click', () => {{
+        const path = card.getAttribute('data-path');
+        if(!unlocked) {{
+          alert('Please subscribe or unlock your account to access this feature.');
+          location.href = '/dashboard#Billing';
+          return;
+        }}
+        location.href = path;
+      }});
+    }});
+  </script>
+</body>
+</html>
+    """
+    return HTMLResponse(html)
+
+# --- Generic tool page (placeholder so clicks work now) ---
+@app.get("/tools/{tool_name}", response_class=HTMLResponse)
+def open_tool(tool_name: str, request: Request):
+    email = request.cookies.get("auth_email")
+    if not email:
+        return RedirectResponse(url=f"{PUBLIC_URL}/dashboard#Billing", status_code=302)
+    title = tool_name.replace("-", " ").title()
+    return HTMLResponse(f"""
+    <html><body style="background:#0b0b0f;color:#fff;font-family:Poppins,sans-serif">
+      <div style="padding:18px;border-bottom:1px solid #222">
+        <a href="/dashboard" style="color:#9aa; text-decoration:none;">← Back</a>
+        <span style="float:right;color:#7ee787;">{email}</span>
+      </div>
+      <div style="padding:28px;">
+        <h1 style="margin:0 0 10px">{title}</h1>
+        <p style="color:#aaa">Placeholder screen. Your functional UI for <b>{title}</b> goes here.</p>
+      </div>
+    </body></html>
+    """)
+# =================== END MODVERA DASHBOARD + AUTH BLOCK ===================
+
         resp = RedirectResponse(url=f"{PUBLIC_URL}/dashboard?welcome=1", status_code=302)
         resp.set_cookie("auth_email", email, httponly=False, samesite="Lax", max_age=60*60*24*30)
         return resp
