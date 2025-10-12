@@ -331,32 +331,30 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
     payload = await request.body()
     try:
         event = stripe.Webhook.construct_event(
-            payload=payload, sig_header=stripe_signature, secret=STRIPE_WEBHOOK_SECRET
+            payload=payload,
+            sig_header=stripe_signature,
+            secret=STRIPE_WEBHOOK_SECRET
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Webhook error: {e}")
-    # handle events here if needed
-    return JSONResponse({"received": True})
 
+    # Optional: handle Stripe events here
+    return {"received": True}
 
-# --- Diagnostics (safe to keep in production) ---
-from datetime import datetime
-from fastapi.responses import JSONResponse
-
-@app.get("/health", response_class=JSONResponse)
+# --- Health + Test Routes ---
+@app.get("/health")
 def health():
-    return {"ok": True, "time": datetime.utcnow().isoformat()}
+    return {"ok": True}
 
-@app.get("/test-checkout", response_class=JSONResponse)
+@app.get("/test-checkout")
 def test_checkout(plan: str = "monthly", email: str = "modverashop@gmail.com"):
-    price_id = os.getenv("PRICE_MONTHLY_ID") if plan == "monthly" else os.getenv("PRICE_ANNUAL_ID")
+    price_id = PRICE_MONTHLY_ID if plan == "monthly" else PRICE_ANNUAL_ID
     return {
         "plan": plan,
         "email": email,
         "price_id": price_id,
-        "have_secret": bool(os.getenv("STRIPE_SECRET_KEY")),
-        "public_url": os.getenv("PUBLIC_URL"),
-        "dev_free": os.getenv("DEV_FREE", "0") == "1",
-        "promo": bool(os.getenv("DEV_PROMO_CODE_ID")),
+        "have_secret": bool(stripe.api_key),
+        "public_url": PUBLIC_URL,
+        "dev_free": DEV_FREE,
+        "promo": bool(DEV_PROMO_CODE_ID),
     }
-added test and health routes
