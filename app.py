@@ -310,24 +310,30 @@ async def create_checkout_session(req: Request):
     data = await req.json()
     plan = data.get("plan")
     email = (data.get("email") or "").strip().lower()
+
+    # Choose price by plan
     price_id = PRICE_MONTHLY_ID if plan == "monthly" else PRICE_ANNUAL_ID
-    if not price_id: raise HTTPException(status_code=400, detail="Price not configured.")
+    if not price_id:
+        raise HTTPException(status_code=400, detail="Price not configured.")
 
-    # Build base params (no allow_promotion_codes yet)
-params = {
-    "mode": "subscription",
-    "line_items": [{"price": price_id, "quantity": 1}],
-    "success_url": f"{PUBLIC_URL}/dashboard?paid=1",
-    "cancel_url": f"{PUBLIC_URL}/landing",
-    "customer_email": email or None,
-}
+    # Build base params (do NOT set allow_promotion_codes here)
+    params = {
+        "mode": "subscription",
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "success_url": f"{PUBLIC_URL}/dashboard?paid=1",
+        "cancel_url": f"{PUBLIC_URL}/landing",
+        "customer_email": email or None,
+    }
 
-# Owner gets the 100% promo automatically (use discounts)
-if DEV_FREE and DEV_PROMO_CODE_ID and email == DEV_FREE_EMAIL:
-    params["discounts"] = [{"promotion_code": DEV_PROMO_CODE_ID}]
-else:
-    # Everyone else can manually enter promo codes at checkout
-    params["allow_promotion_codes"] = True
+    # Owner gets 100% promo automatically via discounts
+    if DEV_FREE and DEV_PROMO_CODE_ID and email == DEV_FREE_EMAIL:
+        params["discounts"] = [{"promotion_code": DEV_PROMO_CODE_ID}]
+    else:
+        # Everyone else can enter promo codes manually
+        params["allow_promotion_codes"] = True
+
+    session = stripe.checkout.Session.create(**params)
+    return JSONResponse({"url": session.url})
 
 
 @app.post("/stripe/webhook")
