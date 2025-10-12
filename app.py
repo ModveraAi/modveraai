@@ -320,8 +320,8 @@ async def create_checkout_session(req: Request):
     params = {
         "mode": "subscription",
         "line_items": [{"price": price_id, "quantity": 1}],
-        "success_url": f"{PUBLIC_URL}/dashboard?paid=1",
-        "cancel_url": f"{PUBLIC_URL}/landing",
+       "success_url": f"{PUBLIC_URL}/auth/complete?session_id={{CHECKOUT_SESSION_ID}}",
+"cancel_url": f"{PUBLIC_URL}/landing",
         "customer_email": email or None,
     }
 
