@@ -401,3 +401,17 @@ def auth_complete(session_id: str):
         return resp
     except Exception:
         return RedirectResponse(url=f"{PUBLIC_URL}/dashboard#Billing", status_code=302)
+from fastapi.responses import RedirectResponse, JSONResponse
+
+@app.get("/unlock")
+def unlock(email: str = "modverashop@gmail.com"):
+    """Manual unlock for owner; sets the auth cookie and redirects to dashboard."""
+    resp = RedirectResponse(url=f"{PUBLIC_URL}/dashboard?welcome=1", status_code=302)
+    resp.set_cookie("auth_email", email, httponly=False, samesite="Lax", max_age=60*60*24*30)
+    return resp
+
+@app.get("/whoami", response_class=JSONResponse)
+def whoami(request: Request):
+    """See which email (if any) is in the cookie."""
+    email = request.cookies.get("auth_email")
+    return {"email": email}
