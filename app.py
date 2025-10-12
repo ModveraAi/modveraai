@@ -368,3 +368,36 @@ def test_checkout(plan: str = "monthly", email: str = "modverashop@gmail.com"):
         "dev_free": DEV_FREE,
         "promo": bool(DEV_PROMO_CODE_ID),
     }
+
+
+from fastapi.responses import RedirectResponse
+
+def has_active_subscription(email: str) -> bool:
+    try:
+        customers = stripe.Customer.search(query=f'email:"{email}"')
+        for c in customers.auto_paging_iter():
+            subs = stripe.Subscription.list(customer=c.id, status="all")
+            for s in subs.auto_paging_iter():
+                if s.status in ("active", "trialing", "past_due"):
+                    return True
+        return False
+    except Exception:
+        return False
+
+@app.get("/auth/complete")
+def auth_complete(session_id: str):
+    try:
+        sess = stripe.checkout.Session.retrieve(session_id, expand=["customer", "customer_details"])
+        email = (sess.get("customer_details") or {}).get("email") \
+                or (sess.get("customer") or {}).get("email")
+        if not email:
+            return RedirectResponse(url=f"{PUBLIC_URL}/dashboard#Billing", status_code=302)
+
+        # Optional: confirm subscription
+        _ = has_active_subscription(email)
+
+        resp = RedirectResponse(url=f"{PUBLIC_URL}/dashboard?welcome=1", status_code=302)
+        resp.set_cookie("auth_email", email, httponly=False, samesite="Lax", max_age=60*60*24*30)
+        return resp
+    except Exception:
+        return RedirectResponse(url=f"{PUBLIC_URL}/dashboard#Billing", status_code=302)
