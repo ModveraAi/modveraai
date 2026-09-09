@@ -4,9 +4,12 @@ import stripe
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from lead_engine import router as lead_router
+from automation_engine import router as automation_router, start_worker
 
 app = FastAPI()
 app.include_router(lead_router)
+app.include_router(automation_router)
+start_worker()
 
 # ====== Environment (set these in Render → Settings → Environment) ======
 PUBLIC_URL           = os.getenv("PUBLIC_URL", "https://modveraai.onrender.com")
